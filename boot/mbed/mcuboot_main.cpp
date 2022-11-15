@@ -22,7 +22,7 @@
 #include "bootutil/bootutil.h"
 #include "bootutil/image.h"
 #include "hal/serial_api.h"
-#include "platform/mbed_application.h"
+#include "mbed_application.h"
 
 #if (MCUBOOT_CRYPTO_BACKEND == MBEDTLS)
 #include "mbedtls/platform.h"
@@ -50,12 +50,10 @@ int main()
 {
     int rc;
 
-#ifdef MCUBOOT_HAVE_LOGGING
     mbed_trace_init();
 #if MCUBOOT_LOG_BOOTLOADER_ONLY
     mbed_trace_include_filters_set("MCUb,BL");
-#endif //MCUBOOT_LOG_BOOTLOADER_ONLY
-#endif //MCUBOOT_HAVE_LOGGING
+#endif
 
     tr_info("Starting MCUboot");
     

@@ -11,6 +11,7 @@ samples/*
 scripts/*
 sim/*
 testplan/*
+ext/cddl_gen/*
 ext/fiat/*
 ext/mbedtls/*
 ext/mbedtls-asn1/*

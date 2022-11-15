@@ -5,7 +5,7 @@ authors = ["David Brown <david.brown@linaro.org>"]
 description = "A simple wrapper around the mcuboot code."
 build = "build.rs"
 publish = false
-edition = "2021"
+edition = "2018"
 
 [features]
 # By default, build with simplistic signature verification.
@@ -80,8 +80,9 @@ direct-xip = []
 # Check (in software) against version downgrades.
 downgrade-prevention = []
 
-# Support images with 32-byte maximum write alignment value.
-max-align-32 = []
+# Large write.  Not meaningful, but present here so that the
+# full-suite tests will work for this configuration.
+large-write = []
 
 [build-dependencies]
 cc = "1.0.25"

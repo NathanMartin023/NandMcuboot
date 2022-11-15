@@ -23,7 +23,7 @@
 
 #include <nuttx/config.h>
 
-#include <syslog.h>
+#include <stdio.h>
 
 #include <sys/boardctl.h>
 
@@ -31,27 +31,6 @@
 #include <bootutil/image.h>
 
 #include "flash_map_backend/flash_map_backend.h"
-
-/****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-/* Should we perform board-specific driver initialization?  There are two
- * ways that board initialization can occur:  1) automatically via
- * board_late_initialize() during bootupif CONFIG_BOARD_LATE_INITIALIZE
- * or 2).
- * via a call to boardctl() if the interface is enabled
- * (CONFIG_BOARDCTL=y).
- * If this task is running as an NSH built-in application, then that
- * initialization has probably already been performed otherwise we do it
- * here.
- */
-
-#undef NEED_BOARDINIT
-
-#if defined(CONFIG_BOARDCTL) && !defined(CONFIG_NSH_ARCHINIT)
-#  define NEED_BOARDINIT 1
-#endif
 
 /****************************************************************************
  * Private Functions
@@ -73,7 +52,7 @@ static void do_boot(struct boot_rsp *rsp)
   ret = flash_area_open(area_id, &flash_area);
   assert(ret == OK);
 
-  syslog(LOG_INFO, "Booting from %s...\n", flash_area->fa_mtd_path);
+  printf("Booting from %s...\n", flash_area->fa_mtd_path);
 
   info.path        = flash_area->fa_mtd_path;
   info.header_size = rsp->br_hdr->ih_hdr_size;
@@ -82,7 +61,7 @@ static void do_boot(struct boot_rsp *rsp)
 
   if (boardctl(BOARDIOC_BOOT_IMAGE, (uintptr_t)&info) != OK)
     {
-      syslog(LOG_ERR, "Failed to load application image!\n");
+      fprintf(stderr, "Failed to load application image!\n");
       FIH_PANIC;
     }
 }
@@ -100,34 +79,13 @@ int main(int argc, FAR char *argv[])
   struct boot_rsp rsp;
   fih_int fih_rc = FIH_FAILURE;
 
-#ifdef NEED_BOARDINIT
-  /* Perform architecture-specific initialization (if configured) */
-
-  boardctl(BOARDIOC_INIT, 0);
-
-#ifdef CONFIG_BOARDCTL_FINALINIT
-  /* Perform architecture-specific final-initialization (if configured) */
-  
-  boardctl(BOARDIOC_FINALINIT, 0);
-#endif
-#endif
-
-  syslog(LOG_INFO, "*** Booting MCUboot build %s ***\n", CONFIG_MCUBOOT_VERSION);
-
-#ifdef CONFIG_MCUBOOT_WATCHDOG
-  int ret = mcuboot_watchdog_init();
-  if (ret < 0)
-  {
-    syslog(LOG_ERR, "Unable to initialize the watchdog timer\n");
-    FIH_PANIC;
-  }
-#endif
+  printf("*** Booting MCUboot build %s ***\n", CONFIG_MCUBOOT_VERSION);
 
   FIH_CALL(boot_go, fih_rc, &rsp);
 
   if (fih_not_eq(fih_rc, FIH_SUCCESS))
     {
-      syslog(LOG_ERR, "Unable to find bootable image\n");
+      fprintf(stderr, "Unable to find bootable image\n");
       FIH_PANIC;
     }
 

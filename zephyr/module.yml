@@ -1,5 +1,5 @@
-name: mcuboot
 samples:
   - boot/zephyr
 build:
-  cmake: ./boot/bootutil/zephyr
+  cmake-ext: True
+  kconfig-ext: True

@@ -16,7 +16,7 @@ Currently MCUboot works with the following operating systems and SoCs:
 - [Apache NuttX](https://nuttx.apache.org/)
 - [RIOT](https://www.riot-os.org/)
 - [Mbed OS](https://os.mbed.com/)
-- [Espressif](https://www.espressif.com/)
+- [Espressif IDF](https://idf.espressif.com/)
 - [Cypress/Infineon](https://www.cypress.com/)
 
 RIOT is supported only as a boot target. We will accept any new port
@@ -44,8 +44,8 @@ The MCUboot documentation is composed of the following pages:
   - [Apache NuttX](readme-nuttx.md)
   - [RIOT](readme-riot.md)
   - [Mbed OS](readme-mbed.md)
-  - [Espressif](readme-espressif.md)
-  - [Cypress/Infineon](../boot/cypress/README.md)
+  - [Espressif IDF](readme-espressif.md)
+  - [Cypress/Infineon](../boot/cypress/readme.md)
   - [Simulator](../sim/README.rst)
 - Testing
   - [Zephyr](testplan-zephyr.md) - Zephyr test plan

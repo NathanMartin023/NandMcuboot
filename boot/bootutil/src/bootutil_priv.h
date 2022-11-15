@@ -82,7 +82,7 @@ struct boot_status {
     uint8_t swap_type;    /* The type of swap in effect */
     uint32_t swap_size;   /* Total size of swapped image */
 #ifdef MCUBOOT_ENC_IMAGES
-    uint8_t enckey[BOOT_NUM_SLOTS][BOOT_ENC_KEY_ALIGN_SIZE];
+    uint8_t enckey[BOOT_NUM_SLOTS][BOOT_ENC_KEY_SIZE];
 #if MCUBOOT_SWAP_SAVE_ENCTLV
     uint8_t enctlv[BOOT_NUM_SLOTS][BOOT_ENC_TLV_ALIGN_SIZE];
 #endif
@@ -109,28 +109,16 @@ struct boot_status {
  *  |                 Encryption key 0 (16 octets) [*]              |
  *  |                                                               |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |                    0xff padding as needed                     |
- *  |  (BOOT_MAX_ALIGN minus 16 octets from Encryption key 0) [*]   |
- *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *  |                 Encryption key 1 (16 octets) [*]              |
  *  |                                                               |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |                    0xff padding as needed                     |
- *  |  (BOOT_MAX_ALIGN minus 16 octets from Encryption key 1) [*]   |
- *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *  |                      Swap size (4 octets)                     |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |                    0xff padding as needed                     |
- *  |        (BOOT_MAX_ALIGN minus 4 octets from Swap size)         |
+ *  |   Swap info   |           0xff padding (7 octets)             |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |   Swap info   |  0xff padding (BOOT_MAX_ALIGN minus 1 octet)  |
+ *  |   Copy done   |           0xff padding (7 octets)             |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |   Copy done   |  0xff padding (BOOT_MAX_ALIGN minus 1 octet)  |
- *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |   Image OK    |  0xff padding (BOOT_MAX_ALIGN minus 1 octet)  |
- *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  |                    0xff padding as needed                     |
- *  |         (BOOT_MAX_ALIGN minus 16 octets from MAGIC)           |
+ *  |   Image OK    |           0xff padding (7 octets)             |
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *  |                       MAGIC (16 octets)                       |
  *  |                                                               |
@@ -140,26 +128,7 @@ struct boot_status {
  *      (`MCUBOOT_ENC_IMAGES`).
  */
 
-union boot_img_magic_t
-{
-    struct {
-        uint16_t align;
-        uint8_t magic[14];
-    };
-    uint8_t val[16];
-};
-
-extern const union boot_img_magic_t boot_img_magic;
-
-#define BOOT_IMG_MAGIC  (boot_img_magic.val)
-
-#if BOOT_MAX_ALIGN == 8
-#define BOOT_IMG_ALIGN  (BOOT_MAX_ALIGN)
-#else
-#define BOOT_IMG_ALIGN  (boot_img_magic.align)
-#endif
-
-_Static_assert(sizeof(boot_img_magic) == BOOT_MAGIC_SZ, "Invalid size for image magic");
+extern const uint32_t boot_img_magic[4];
 
 #if !defined(MCUBOOT_DIRECT_XIP) && !defined(MCUBOOT_RAM_LOAD)
 #define ARE_SLOTS_EQUIVALENT()    0
@@ -180,6 +149,17 @@ _Static_assert(sizeof(boot_img_magic) == BOOT_MAGIC_SZ, "Invalid size for image 
                  (hdr)->ih_ver.iv_minor,                                  \
                  (hdr)->ih_ver.iv_revision,                               \
                  (hdr)->ih_ver.iv_build_num)
+
+/*
+ * The current flashmap API does not check the amount of space allocated when
+ * loading sector data from the flash device, allowing for smaller counts here
+ * would most surely incur in overruns.
+ *
+ * TODO: make flashmap API receive the current sector array size.
+ */
+#if BOOT_MAX_IMG_SECTORS < 32
+#error "Too few sectors, please increase BOOT_MAX_IMG_SECTORS to at least 32"
+#endif
 
 #if MCUBOOT_SWAP_USING_MOVE
 #define BOOT_STATUS_MOVE_STATE_COUNT    1
@@ -462,8 +442,6 @@ struct bootsim_ram_info *bootsim_get_ram_info(void);
 #define LOAD_IMAGE_DATA(hdr, fap, start, output, size)       \
     (flash_area_read((fap), (start), (output), (size)))
 #endif /* MCUBOOT_RAM_LOAD */
-
-uint32_t bootutil_max_image_size(const struct flash_area *fap);
 
 #ifdef __cplusplus
 }

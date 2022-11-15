@@ -69,16 +69,13 @@ int flash_area_erase(const struct flash_area *fa,
                      uint32_t off, uint32_t len);
 
 //! Returns this `flash_area`s alignment
-uint32_t flash_area_align(const struct flash_area *area);
+size_t flash_area_align(const struct flash_area *area);
 //! Returns the value read from an erased flash area byte
 uint8_t flash_area_erased_val(const struct flash_area *area);
 
 //! Given flash area ID, return info about sectors within the area
 int flash_area_get_sectors(int fa_id, uint32_t *count,
                            struct flash_sector *sectors);
-
-//! Retrieve the flash sector a given offset belongs to.
-int flash_area_sector_from_off(uint32_t off, struct flash_sector *sector);
 
 //! Returns the `fa_id` for slot, where slot is 0 (primary) or 1 (secondary).
 //!

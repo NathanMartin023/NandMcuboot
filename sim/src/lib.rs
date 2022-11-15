@@ -16,7 +16,6 @@ mod caps;
 mod depends;
 mod image;
 mod tlv;
-mod utils;
 pub mod testlog;
 
 pub use crate::{

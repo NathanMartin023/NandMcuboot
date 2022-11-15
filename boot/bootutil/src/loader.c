@@ -36,7 +36,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bootutil/bootutil.h"
-#include "bootutil/bootutil_public.h"
 #include "bootutil/image.h"
 #include "bootutil_priv.h"
 #include "swap_priv.h"
@@ -46,7 +45,10 @@
 #include "bootutil/fault_injection_hardening.h"
 #include "bootutil/ramload.h"
 #include "bootutil/boot_hooks.h"
-#include "bootutil/mcuboot_status.h"
+
+#if defined(CONFIG_SOC_NRF5340_CPUAPP) && defined(PM_CPUNET_B0N_ADDRESS)
+#include <dfu/pcd.h> 
+#endif
 
 #ifdef MCUBOOT_ENC_IMAGES
 #include "bootutil/enc_key.h"
@@ -81,12 +83,6 @@ static struct boot_loader_state boot_data;
 #define TARGET_STATIC
 #endif
 
-#if BOOT_MAX_ALIGN > 1024
-#define BUF_SZ BOOT_MAX_ALIGN
-#else
-#define BUF_SZ 1024
-#endif
-
 static int
 boot_read_image_headers(struct boot_loader_state *state, bool require_all,
         struct boot_status *bs)
@@ -108,6 +104,15 @@ boot_read_image_headers(struct boot_loader_state *state, bool require_all,
              *
              * Failure to read any headers is a fatal error.
              */
+#ifdef PM_S1_ADDRESS
+            /* Patch needed for NCS. The primary slot of the second image
+             * (image 1) will not contain a valid image header until an upgrade
+             * of mcuboot has happened (filling S1 with the new version).
+             */
+            if (BOOT_CURR_IMG(state) == 1 && i == 0) {
+                continue;
+            }
+#endif /* PM_S1_ADDRESS */
             if (i > 0 && !require_all) {
                 return 0;
             } else {
@@ -387,7 +392,7 @@ void
 boot_status_reset(struct boot_status *bs)
 {
 #ifdef MCUBOOT_ENC_IMAGES
-    memset(&bs->enckey, 0xff, BOOT_NUM_SLOTS * BOOT_ENC_KEY_ALIGN_SIZE);
+    memset(&bs->enckey, 0xff, BOOT_NUM_SLOTS * BOOT_ENC_KEY_SIZE);
 #if MCUBOOT_SWAP_SAVE_ENCTLV
     memset(&bs->enctlv, 0xff, BOOT_NUM_SLOTS * BOOT_ENC_TLV_ALIGN_SIZE);
 #endif
@@ -427,7 +432,7 @@ boot_write_status(const struct boot_loader_state *state, struct boot_status *bs)
     int area_id;
     int rc = 0;
     uint8_t buf[BOOT_MAX_ALIGN];
-    uint32_t align;
+    uint8_t align;
     uint8_t erased_val;
 
     /* NOTE: The first sector copied (that is the last sector on slot) contains
@@ -616,7 +621,7 @@ boot_check_header_erased(struct boot_loader_state *state, int slot)
 #if (BOOT_IMAGE_NUMBER > 1) || \
     defined(MCUBOOT_DIRECT_XIP) || \
     defined(MCUBOOT_RAM_LOAD) || \
-    defined(MCUBOOT_DOWNGRADE_PREVENTION)
+    (defined(MCUBOOT_OVERWRITE_ONLY) && defined(MCUBOOT_DOWNGRADE_PREVENTION))
 /**
  * Compare image version numbers not including the build number
  *
@@ -799,7 +804,24 @@ boot_validate_slot(struct boot_loader_state *state, int slot,
             goto out;
         }
 
-        if (reset_value < pri_fa->fa_off || reset_value> (pri_fa->fa_off + pri_fa->fa_size)) {
+        uint32_t min_addr, max_addr;
+
+#ifdef PM_CPUNET_APP_ADDRESS
+        /* The primary slot for the network core is emulated in RAM.
+         * Its flash_area hasn't got relevant boundaries.
+         * Therfore need to override its boundaries for the check.
+         */
+        if (BOOT_CURR_IMG(state) == 1) {
+            min_addr = PM_CPUNET_APP_ADDRESS;
+            max_addr = PM_CPUNET_APP_ADDRESS + PM_CPUNET_APP_SIZE;
+        } else
+#endif
+        {
+            min_addr = pri_fa->fa_off;
+            max_addr = pri_fa->fa_off + pri_fa->fa_size;
+        }
+
+        if (reset_value < min_addr || reset_value> (max_addr)) {
             BOOT_LOG_ERR("Reset address of image in secondary slot is not in the primary slot");
             BOOT_LOG_ERR("Erasing image from secondary slot");
 
@@ -882,6 +904,47 @@ boot_validated_swap_type(struct boot_loader_state *state,
 {
     int swap_type;
     fih_int fih_rc = FIH_FAILURE;
+    bool upgrade_valid = false;
+
+#if defined(PM_S1_ADDRESS) || defined(CONFIG_SOC_NRF5340_CPUAPP)
+    const struct flash_area *secondary_fa =
+        BOOT_IMG_AREA(state, BOOT_SECONDARY_SLOT);
+    struct image_header *hdr = (struct image_header *)secondary_fa->fa_off;
+    uint32_t vtable_addr = 0;
+    uint32_t *vtable = 0;
+    uint32_t reset_addr = 0;
+    /* Patch needed for NCS. Since image 0 (the app) and image 1 (the other
+     * B1 slot S0 or S1) share the same secondary slot, we need to check
+     * whether the update candidate in the secondary slot is intended for
+     * image 0 or image 1 primary by looking at the address of the reset
+     * vector. Note that there are good reasons for not using img_num from
+     * the swap info.
+     */
+
+    if (hdr->ih_magic == IMAGE_MAGIC) {
+        vtable_addr = (uint32_t)hdr + hdr->ih_hdr_size;
+        vtable = (uint32_t *)(vtable_addr);
+        reset_addr = vtable[1];
+#ifdef PM_S1_ADDRESS
+        const struct flash_area *primary_fa;
+        int rc = flash_area_open(flash_area_id_from_multi_image_slot(
+                    BOOT_CURR_IMG(state),
+                    BOOT_PRIMARY_SLOT),
+                &primary_fa);
+
+        if (rc != 0) {
+            return BOOT_SWAP_TYPE_FAIL;
+        }
+        /* Get start and end of primary slot for current image */
+        if (reset_addr < primary_fa->fa_off ||
+                reset_addr > (primary_fa->fa_off + primary_fa->fa_size)) {
+            /* The image in the secondary slot is not intended for this image
+            */
+            return BOOT_SWAP_TYPE_NONE;
+        }
+#endif /* PM_S1_ADDRESS */
+    }
+#endif /* PM_S1_ADDRESS || CONFIG_SOC_NRF5340_CPUAPP */
 
     swap_type = boot_swap_type_multi(BOOT_CURR_IMG(state));
     if (BOOT_IS_UPGRADE(swap_type)) {
@@ -895,7 +958,37 @@ boot_validated_swap_type(struct boot_loader_state *state,
             } else {
                 swap_type = BOOT_SWAP_TYPE_FAIL;
             }
+        } else {
+            upgrade_valid = true;
         }
+
+#if defined(CONFIG_SOC_NRF5340_CPUAPP) && defined(PM_CPUNET_B0N_ADDRESS)
+        /* If the update is valid, and it targets the network core: perform the
+         * update and indicate to the caller of this function that no update is
+         * available
+         */
+        if (upgrade_valid && reset_addr > PM_CPUNET_B0N_ADDRESS) {
+            uint32_t fw_size = hdr->ih_img_size;
+
+            BOOT_LOG_INF("Starting network core update");
+            int rc = pcd_network_core_update(vtable, fw_size);
+
+            if (rc != 0) {
+                swap_type = BOOT_SWAP_TYPE_FAIL;
+            } else {
+                BOOT_LOG_INF("Done updating network core");
+#if defined(MCUBOOT_SWAP_USING_SCRATCH) || defined(MCUBOOT_SWAP_USING_MOVE)
+                /* swap_erase_trailer_sectors is undefined if upgrade only
+                 * method is used. There is no need to erase sectors, because
+                 * the image cannot be reverted.
+                 */
+                rc = swap_erase_trailer_sectors(state,
+                        secondary_fa);
+#endif
+                swap_type = BOOT_SWAP_TYPE_NONE;
+            }
+        }
+#endif /* CONFIG_SOC_NRF5340_CPUAPP */
     }
 
     return swap_type;
@@ -952,7 +1045,7 @@ boot_copy_region(struct boot_loader_state *state,
     uint8_t image_index;
 #endif
 
-    TARGET_STATIC uint8_t buf[BUF_SZ] __attribute__((aligned(4)));
+    TARGET_STATIC uint8_t buf[1024] __attribute__((aligned(4)));
 
 #if !defined(MCUBOOT_ENC_IMAGES)
     (void)state;
@@ -1262,7 +1355,7 @@ boot_swap_image(struct boot_loader_state *state, struct boot_status *bs)
                 rc = 0;
             }
         } else {
-            memset(bs->enckey[0], 0xff, BOOT_ENC_KEY_ALIGN_SIZE);
+            memset(bs->enckey[0], 0xff, BOOT_ENC_KEY_SIZE);
         }
 #endif
 
@@ -1286,7 +1379,7 @@ boot_swap_image(struct boot_loader_state *state, struct boot_status *bs)
                 rc = 0;
             }
         } else {
-            memset(bs->enckey[1], 0xff, BOOT_ENC_KEY_ALIGN_SIZE);
+            memset(bs->enckey[1], 0xff, BOOT_ENC_KEY_SIZE);
         }
 #endif
 
@@ -1332,8 +1425,6 @@ boot_swap_image(struct boot_loader_state *state, struct boot_status *bs)
                      boot_status_fails);
     }
 #endif
-    rc = BOOT_HOOK_CALL(boot_copy_region_post_hook, 0, BOOT_CURR_IMG(state),
-                        BOOT_IMG_AREA(state, BOOT_PRIMARY_SLOT), size);
 
     return 0;
 }
@@ -1488,7 +1579,7 @@ boot_verify_dependencies(struct boot_loader_state *state)
         if (rc == 0) {
             /* All dependencies've been satisfied, continue with next image. */
             BOOT_CURR_IMG(state)++;
-        } else {
+	} else if (rc == BOOT_EBADIMAGE) {
             /* Cannot upgrade due to non-met dependencies, so disable all
              * image upgrades.
              */
@@ -1497,7 +1588,10 @@ boot_verify_dependencies(struct boot_loader_state *state)
                 BOOT_SWAP_TYPE(state) = BOOT_SWAP_TYPE_NONE;
             }
             break;
-        }
+	} else {
+	    /* Other error happened, images are inconsistent */
+		return rc;
+	}
     }
     return rc;
 }
@@ -1905,60 +1999,6 @@ boot_update_hw_rollback_protection(struct boot_loader_state *state)
 #endif
 }
 
-/**
- * Checks test swap downgrade prevention conditions.
- *
- * Function called only for swap upgrades test run.  It may prevent
- * swap if slot 1 image has <= version number or < security counter
- *
- * @param  state        Boot loader status information.
- *
- * @return              0 - image can be swapped, -1 downgrade prevention
- */
-static int
-check_downgrade_prevention(struct boot_loader_state *state)
-{
-#if defined(MCUBOOT_DOWNGRADE_PREVENTION) && \
-    (defined(MCUBOOT_SWAP_USING_MOVE) || defined(MCUBOOT_SWAP_USING_SCRATCH))
-    uint32_t security_counter[2];
-    int rc;
-
-    if (MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER) {
-        /* If there was security no counter in slot 0, allow swap */
-        rc = bootutil_get_img_security_cnt(&(BOOT_IMG(state, 0).hdr),
-                                           BOOT_IMG(state, 0).area,
-                                           &security_counter[0]);
-        if (rc != 0) {
-            return 0;
-        }
-        /* If there is no security counter in slot 1, or it's lower than
-         * that of slot 0, prevent downgrade */
-        rc = bootutil_get_img_security_cnt(&(BOOT_IMG(state, 1).hdr),
-                                           BOOT_IMG(state, 1).area,
-                                           &security_counter[1]);
-        if (rc != 0 || security_counter[0] > security_counter[1]) {
-            rc = -1;
-        }
-    }
-    else {
-        rc = boot_version_cmp(&boot_img_hdr(state, BOOT_SECONDARY_SLOT)->ih_ver,
-                              &boot_img_hdr(state, BOOT_PRIMARY_SLOT)->ih_ver);
-    }
-    if (rc < 0) {
-        /* Image in slot 0 prevents downgrade, delete image in slot 1 */
-        BOOT_LOG_INF("Image in slot 1 erased due to downgrade prevention");
-        flash_area_erase(BOOT_IMG(state, 1).area, 0,
-                         flash_area_get_size(BOOT_IMG(state, 1).area));
-    } else {
-        rc = 0;
-    }
-    return rc;
-#else
-    (void)state;
-    return 0;
-#endif
-}
-
 fih_int
 context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
 {
@@ -2055,9 +2095,6 @@ context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
     }
 #endif
 
-    /* Trigger status change callback with upgrading status */
-    mcuboot_status_change(MCUBOOT_STATUS_UPGRADING);
-
     /* Iterate over all the images. At this point there are no aborted swaps
      * and the swap types are determined for each image. By the end of the loop
      * all required update operations will have been finished.
@@ -2087,13 +2124,7 @@ context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
         case BOOT_SWAP_TYPE_NONE:
             break;
 
-        case BOOT_SWAP_TYPE_TEST:
-            if (check_downgrade_prevention(state) != 0) {
-                /* Downgrade prevented */
-                BOOT_SWAP_TYPE(state) = BOOT_SWAP_TYPE_NONE;
-                break;
-            }
-            /* fallthrough */
+        case BOOT_SWAP_TYPE_TEST:          /* fallthrough */
         case BOOT_SWAP_TYPE_PERM:          /* fallthrough */
         case BOOT_SWAP_TYPE_REVERT:
             rc = BOOT_HOOK_CALL(boot_perform_update_hook, BOOT_HOOK_REGULAR,
@@ -2159,10 +2190,23 @@ context_boot_go(struct boot_loader_state *state, struct boot_rsp *rsp)
         }
 
 #ifdef MCUBOOT_VALIDATE_PRIMARY_SLOT
-        FIH_CALL(boot_validate_slot, fih_rc, state, BOOT_PRIMARY_SLOT, NULL);
-        if (fih_not_eq(fih_rc, FIH_SUCCESS)) {
-            goto out;
-        }
+#ifdef PM_S1_ADDRESS
+	/* Patch needed for NCS. If secure boot is enabled, then mcuboot
+	 * will be stored in either partition S0 or S1. Image 1 primary
+	 * will point to the 'other' Sx partition. Hence, image 1 primary
+	 * does not contain a valid image until mcuboot has been upgraded.
+	 * Note that B0 will perform validation of the active mcuboot image,
+	 * so there is no security lost by skipping this check for image 1
+	 * primary.
+	 */
+	if (BOOT_CURR_IMG(state) == 0)
+#endif
+	{
+            FIH_CALL(boot_validate_slot, fih_rc, state, BOOT_PRIMARY_SLOT, NULL);
+            if (fih_not_eq(fih_rc, FIH_SUCCESS)) {
+                goto out;
+            }
+	}
 #else
         /* Even if we're not re-validating the primary slot, we could be booting
          * onto an empty flash chip. At least do a basic sanity check that
@@ -2876,7 +2920,6 @@ boot_remove_image_from_flash(struct boot_loader_state *state, uint32_t slot)
     rc = flash_area_open(area_id, &fap);
     if (rc == 0) {
         flash_area_erase(fap, 0, flash_area_get_size(fap));
-        flash_area_close(fap);
     }
 
     return rc;

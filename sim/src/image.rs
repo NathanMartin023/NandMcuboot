@@ -54,7 +54,6 @@ use crate::depends::{
     UpgradeInfo,
 };
 use crate::tlv::{ManifestGen, TlvGen, TlvFlags};
-use crate::utils::align_up;
 use typenum::{U32, U16};
 
 /// For testing, use a non-zero offset for the ram-load, to make sure the offset is getting used
@@ -291,29 +290,6 @@ impl ImagesBuilder {
         }
     }
 
-    pub fn make_oversized_secondary_slot_image(self) -> Images {
-        let mut bad_flash = self.flash;
-        let ram = self.ram.clone(); // TODO: Avoid this clone.
-        let images = self.slots.into_iter().enumerate().map(|(image_num, slots)| {
-            let dep = BoringDep::new(image_num, &NO_DEPS);
-            let primaries = install_image(&mut bad_flash, &slots[0],
-                maximal(32784), &ram, &dep, false);
-            let upgrades = install_image(&mut bad_flash, &slots[1],
-                ImageSize::Oversized, &ram, &dep, false);
-            OneImage {
-                slots,
-                primaries,
-                upgrades,
-            }}).collect();
-        Images {
-            flash: bad_flash,
-            areadesc: self.areadesc,
-            images,
-            total_count: None,
-            ram: self.ram,
-        }
-    }
-
     pub fn make_erased_secondary_image(self) -> Images {
         let mut flash = self.flash;
         let ram = self.ram.clone(); // TODO: Avoid this clone.
@@ -344,28 +320,6 @@ impl ImagesBuilder {
             let primaries = install_no_image();
             let upgrades = install_image(&mut flash, &slots[1],
                 maximal(32784), &ram, &dep, false);
-            OneImage {
-                slots,
-                primaries,
-                upgrades,
-            }}).collect();
-        Images {
-            flash,
-            areadesc: self.areadesc,
-            images,
-            total_count: None,
-            ram: self.ram,
-        }
-    }
-
-    pub fn make_oversized_bootstrap_image(self) -> Images {
-        let mut flash = self.flash;
-        let ram = self.ram.clone(); // TODO: Avoid this clone.
-        let images = self.slots.into_iter().enumerate().map(|(image_num, slots)| {
-            let dep = BoringDep::new(image_num, &NO_DEPS);
-            let primaries = install_no_image();
-            let upgrades = install_image(&mut flash, &slots[1],
-                ImageSize::Oversized, &ram, &dep, false);
             OneImage {
                 slots,
                 primaries,
@@ -544,39 +498,6 @@ impl Images {
             }
 
             if !self.verify_trailers(&flash, 0, BOOT_MAGIC_GOOD,
-                                     BOOT_FLAG_SET, BOOT_FLAG_SET) {
-                warn!("Mismatched trailer for the primary slot");
-                fails += 1;
-            }
-        }
-
-        if fails > 0 {
-            error!("Expected trailer on secondary slot to be erased");
-        }
-
-        fails > 0
-    }
-
-    pub fn run_oversized_bootstrap(&self) -> bool {
-        let mut flash = self.flash.clone();
-        let mut fails = 0;
-
-        if Caps::Bootstrap.present() {
-            info!("Try bootstraping image in the primary");
-
-            let boot_result = c::boot_go(&mut flash, &self.areadesc, None, None, false).interrupted();
-
-            if boot_result {
-                warn!("Failed first boot");
-                fails += 1;
-            }
-
-            if self.verify_images(&flash, 0, 1) {
-                warn!("Image in the first slot was not bootstrapped");
-                fails += 1;
-            }
-
-            if self.verify_trailers(&flash, 0, BOOT_MAGIC_GOOD,
                                      BOOT_FLAG_SET, BOOT_FLAG_SET) {
                 warn!("Mismatched trailer for the primary slot");
                 fails += 1;
@@ -797,53 +718,6 @@ impl Images {
 
         if fails > 0 {
             error!("Error running upgrade without revert");
-        }
-
-        fails > 0
-    }
-
-    // Test taht too big upgrade image will be rejected
-    pub fn run_oversizefail_upgrade(&self) -> bool {
-        let mut flash = self.flash.clone();
-        let mut fails = 0;
-
-        info!("Try upgrade image with to big size");
-
-        // Only perform this test if an upgrade is expected to happen.
-        if !Caps::modifies_flash() {
-            info!("Skipping upgrade image with bad signature");
-            return false;
-        }
-
-        self.mark_upgrades(&mut flash, 0);
-        self.mark_permanent_upgrades(&mut flash, 0);
-        self.mark_upgrades(&mut flash, 1);
-
-        if !self.verify_trailers(&flash, 0, BOOT_MAGIC_GOOD,
-                                 BOOT_FLAG_SET, BOOT_FLAG_UNSET) {
-            warn!("1. Mismatched trailer for the primary slot");
-            fails += 1;
-        }
-
-        // Run the bootloader...
-        if !c::boot_go(&mut flash, &self.areadesc, None, None, false).success() {
-            warn!("Failed first boot");
-            fails += 1;
-        }
-
-        // State should not have changed
-        if !self.verify_images(&flash, 0, 0) {
-            warn!("Failed image verification");
-            fails += 1;
-        }
-        if !self.verify_trailers(&flash, 0, BOOT_MAGIC_GOOD,
-                                 BOOT_FLAG_SET, BOOT_FLAG_UNSET) {
-            warn!("2. Mismatched trailer for the primary slot");
-            fails += 1;
-        }
-
-        if fails > 0 {
-            error!("Expected an upgrade failure when image has to big size");
         }
 
         fails > 0
@@ -1610,40 +1484,6 @@ enum ImageSize {
     Given(usize),
     /// Make the image as large as it can be for the partition/device.
     Largest,
-    /// Make the image quite larger than it can be for the partition/device/
-    Oversized,
-}
-
-#[cfg(not(feature = "max-align-32"))]
-fn tralier_estimation(dev: &dyn Flash) -> usize {
-    c::boot_trailer_sz(dev.align() as u32) as usize
-}
-
-#[cfg(feature = "max-align-32")]
-fn tralier_estimation(dev: &dyn Flash) -> usize {
-
-    let sector_size = dev.sector_iter().next().unwrap().size as u32;
-
-    align_up(c::boot_trailer_sz(dev.align() as u32), sector_size) as usize
-}
-
-fn image_largest_trailer(dev: &dyn Flash) -> usize {
-            // Using the header size we know, the trailer size, and the slot size, we can compute
-            // the largest image possible.
-            let trailer = if Caps::OverwriteUpgrade.present() {
-                // This computation is incorrect, and we need to figure out the correct size.
-                // c::boot_status_sz(dev.align() as u32) as usize
-                16 + 4 * dev.align()
-            } else if Caps::SwapUsingMove.present() {
-                let sector_size = dev.sector_iter().next().unwrap().size as u32;
-                align_up(c::boot_trailer_sz(dev.align() as u32), sector_size) as usize
-            } else if Caps::SwapUsingScratch.present() {
-                tralier_estimation(dev)
-            } else {
-                panic!("The maximum image size can't be calculated.")
-            };
-
-            trailer
 }
 
 /// Install a "program" into the given image.  This fakes the image header, or at least all of the
@@ -1675,22 +1515,20 @@ fn install_image(flash: &mut SimMultiFlash, slot: &SlotInfo, len: ImageSize,
     let len = match len {
         ImageSize::Given(size) => size,
         ImageSize::Largest => {
-            let trailer = image_largest_trailer(dev);
+            // Using the header size we know, the trailer size, and the slot size, we can compute
+            // the largest image possible.
+            let trailer = if Caps::OverwriteUpgrade.present() {
+                // This computation is incorrect, and we need to figure out the correct size.
+                // c::boot_status_sz(dev.align() as u32) as usize
+                16 + 4 * dev.align()
+            } else {
+                c::boot_trailer_sz(dev.align() as u32) as usize
+            };
             let tlv_len = tlv.estimate_size();
             info!("slot: 0x{:x}, HDR: 0x{:x}, trailer: 0x{:x}",
                 slot_len, HDR_SIZE, trailer);
             slot_len - HDR_SIZE - trailer - tlv_len
-        },
-        ImageSize::Oversized => {
-            let trailer = image_largest_trailer(dev);
-            let tlv_len = tlv.estimate_size();
-            info!("slot: 0x{:x}, HDR: 0x{:x}, trailer: 0x{:x}",
-                slot_len, HDR_SIZE, trailer);
-            // the overflow size is rougly estimated to work for all
-            // configurations. It might be precise if tlv_len will be maked precise.
-            slot_len - HDR_SIZE - trailer - tlv_len + dev.align()*4
         }
-
     };
 
     // Generate a boot header.  Note that the size doesn't include the header.
@@ -1962,7 +1800,7 @@ fn verify_trailer(flash: &SimMultiFlash, slot: &SlotInfo,
 
     failed |= match magic {
         Some(v) => {
-            let magic_off = (c::boot_max_align() * 3) + (c::boot_magic_sz() - MAGIC.len());
+            let magic_off = c::boot_max_align() * 3;
             if v == 1 && &copy[magic_off..] != MAGIC {
                 warn!("\"magic\" mismatch at {:#x}", offset);
                 true
@@ -2099,17 +1937,10 @@ pub struct SlotInfo {
     pub dev_id: u8,
 }
 
-#[cfg(not(feature = "max-align-32"))]
 const MAGIC: &[u8] = &[0x77, 0xc2, 0x95, 0xf3,
                        0x60, 0xd2, 0xef, 0x7f,
                        0x35, 0x52, 0x50, 0x0f,
                        0x2c, 0xb6, 0x79, 0x80];
-
-#[cfg(feature = "max-align-32")]
-const MAGIC: &[u8] = &[0x20, 0x00, 0x2d, 0xe1,
-                       0x5d, 0x29, 0x41, 0x0b,
-                       0x8d, 0x77, 0x67, 0x9c,
-                       0x11, 0x0f, 0x1f, 0x8a];
 
 // Replicates defines found in bootutil.h
 const BOOT_MAGIC_GOOD: Option<u8> = Some(1);
@@ -2127,9 +1958,8 @@ pub fn mark_upgrade(flash: &mut SimMultiFlash, slot: &SlotInfo) {
         // The write size is larger than the magic value.  Fill a buffer
         // with the erased value, put the MAGIC in it, and write it in its
         // entirety.
-        let mut buf = vec![dev.erased_val(); c::boot_max_align()];
-        let magic_off = (offset % align) + (c::boot_magic_sz() - MAGIC.len());
-        buf[magic_off..].copy_from_slice(MAGIC);
+        let mut buf = vec![dev.erased_val(); align];
+        buf[(offset % align)..].copy_from_slice(MAGIC);
         dev.write(offset - (offset % align), &buf).unwrap();
     } else {
         dev.write(offset, MAGIC).unwrap();
@@ -2194,12 +2024,12 @@ pub fn show_sizes() {
     }
 }
 
-#[cfg(not(feature = "max-align-32"))]
+#[cfg(not(feature = "large-write"))]
 fn test_alignments() -> &'static [usize] {
     &[1, 2, 4, 8]
 }
 
-#[cfg(feature = "max-align-32")]
+#[cfg(feature = "large-write")]
 fn test_alignments() -> &'static [usize] {
-    &[32]
+    &[1, 2, 4, 8, 128, 512]
 }

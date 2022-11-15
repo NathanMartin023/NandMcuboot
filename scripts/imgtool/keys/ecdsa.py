@@ -33,11 +33,6 @@ class ECDSA256P1Public(KeyClass):
                 encoding=serialization.Encoding.DER,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo)
 
-    def get_public_pem(self):
-        return self._get_public().public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo)
-
     def get_private_bytes(self, minimal):
         self._unsupported('get_private_bytes')
 

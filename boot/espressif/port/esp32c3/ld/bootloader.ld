@@ -1,27 +1,21 @@
 /*
- * SPDX-FileCopyrightText: 2021 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
-/* Simplified memory map for the bootloader.
- *
- * The main purpose is to make sure the bootloader can load into main memory
- * without overwriting itself.
+ * Linker file used to link the bootloader.
  */
 
 MEMORY
 {
-  iram_seg (RWX) :                  org = 0x403C8000, len = 0x8000
-  iram_loader_seg (RWX) :           org = 0x403D0000, len = 0x4800
-  dram_seg (RW) :                   org = 0x3FCD5000, len = 0x8C00
+  iram_seg (RWX) :                  org = 0x403CB000, len = 0x5000
+  iram_loader_seg (RWX) :           org = 0x403D0000, len = 0x6000
+  dram_seg (RW) :                   org = 0x3FCD6000, len = 0x7000
 }
 
 /*  Default entry point:  */
 ENTRY(main);
 
+
 SECTIONS
 {
+
   .iram_loader.text :
   {
     . = ALIGN (16);
@@ -32,14 +26,13 @@ SECTIONS
     *libhal.a:bootloader_flash_config_esp32c3.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_clock_loader.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_common_loader.*(.literal .text .literal.* .text.*)
-    *libhal.a:bootloader_init_common.*(.literal .text .literal.* .text.*)
+    *libhal.a:bootloader_flash.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_random.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_random*.*(.literal.bootloader_random_disable .text.bootloader_random_disable)
     *libhal.a:bootloader_random*.*(.literal.bootloader_random_enable .text.bootloader_random_enable)
     *libhal.a:bootloader_efuse_esp32c3.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_utility.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_sha.*(.literal .text .literal.* .text.*)
-    *libhal.a:bootloader_console.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_console_loader.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_panic.*(.literal .text .literal.* .text.*)
     *libhal.a:bootloader_soc.*(.literal .text .literal.* .text.*)

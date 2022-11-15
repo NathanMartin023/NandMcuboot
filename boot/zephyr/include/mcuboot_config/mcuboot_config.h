@@ -9,7 +9,16 @@
 #ifndef __MCUBOOT_CONFIG_H__
 #define __MCUBOOT_CONFIG_H__
 
-#include <zephyr/devicetree.h>
+/*
+ * This file is also included by the simulator, but we don't want to
+ * define anything here in simulator builds.
+ *
+ * Instead of using mcuboot_config.h, the simulator adds MCUBOOT_xxx
+ * configuration flags to the compiler command lines based on the
+ * values of environment variables. However, the file still must
+ * exist, or bootutil won't build.
+ */
+#ifndef __BOOTSIM__
 
 #ifdef CONFIG_BOOT_SIGNATURE_TYPE_RSA
 #define MCUBOOT_SIGN_RSA
@@ -39,13 +48,9 @@
 #define MCUBOOT_USE_TINYCRYPT
 #elif defined(CONFIG_BOOT_USE_CC310)
 #define MCUBOOT_USE_CC310
-#ifdef CONFIG_BOOT_USE_NRF_CC310_BL
-#define MCUBOOT_USE_NRF_CC310_BL
+#elif defined(CONFIG_BOOT_USE_NRF_EXTERNAL_CRYPTO)
+#define MCUBOOT_USE_NRF_EXTERNAL_CRYPTO
 #endif
-#endif
-
-/* Zephyr, regardless of C library used, provides snprintf */
-#define MCUBOOT_USE_SNPRINTF 1
 
 #ifdef CONFIG_BOOT_HW_KEY
 #define MCUBOOT_HW_KEY
@@ -53,10 +58,6 @@
 
 #ifdef CONFIG_BOOT_VALIDATE_SLOT0
 #define MCUBOOT_VALIDATE_PRIMARY_SLOT
-#endif
-
-#ifdef CONFIG_BOOT_VALIDATE_SLOT0_ONCE
-#define MCUBOOT_VALIDATE_PRIMARY_SLOT_ONCE
 #endif
 
 #ifdef CONFIG_BOOT_UPGRADE_ONLY
@@ -79,12 +80,6 @@
 
 #ifdef CONFIG_BOOT_DIRECT_XIP_REVERT
 #define MCUBOOT_DIRECT_XIP_REVERT
-#endif
-
-#ifdef CONFIG_BOOT_RAM_LOAD
-#define MCUBOOT_RAM_LOAD 1
-#define IMAGE_EXECUTABLE_RAM_START CONFIG_BOOT_IMAGE_EXECUTABLE_RAM_START
-#define IMAGE_EXECUTABLE_RAM_SIZE CONFIG_BOOT_IMAGE_EXECUTABLE_RAM_SIZE
 #endif
 
 #ifdef CONFIG_UPDATEABLE_IMAGE_NUMBER
@@ -113,11 +108,6 @@
 #define MCUBOOT_ENCRYPT_EC256
 #endif
 
-#ifdef CONFIG_BOOT_SERIAL_ENCRYPT_EC256
-#define MCUBOOT_ENC_IMAGES
-#define MCUBOOT_ENCRYPT_EC256
-#endif
-
 #ifdef CONFIG_BOOT_ENCRYPT_X25519
 #define MCUBOOT_ENC_IMAGES
 #define MCUBOOT_ENCRYPT_X25519
@@ -133,14 +123,6 @@
 
 #ifdef CONFIG_MCUBOOT_DOWNGRADE_PREVENTION
 #define MCUBOOT_DOWNGRADE_PREVENTION 1
-/* MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER is used later as bool value so it is
- * always defined, (unlike MCUBOOT_DOWNGRADE_PREVENTION which is only used in
- * preprocessor condition and my be not defined) */
-#  ifdef CONFIG_MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER
-#    define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 1
-#  else
-#    define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 0
-#  endif
 #endif
 
 #ifdef CONFIG_MCUBOOT_HW_DOWNGRADE_PREVENTION
@@ -181,10 +163,6 @@
 #define MCUBOOT_MGMT_CUSTOM_IMG_LIST
 #endif
 
-#ifdef CONFIG_BOOT_MGMT_ECHO
-#define MCUBOOT_BOOT_MGMT_ECHO
-#endif
-
 #ifdef CONFIG_BOOT_IMAGE_ACCESS_HOOKS
 #define MCUBOOT_IMAGE_ACCESS_HOOKS
 #endif
@@ -199,10 +177,6 @@
  */
 #ifdef CONFIG_MCUBOOT_SERIAL_DIRECT_IMAGE_UPLOAD
 #define MCUBOOT_SERIAL_DIRECT_IMAGE_UPLOAD
-#endif
-
-#ifdef CONFIG_BOOT_SERIAL_WAIT_FOR_DFU
-#define MCUBOOT_SERIAL_WAIT_FOR_DFU
 #endif
 
 /*
@@ -241,13 +215,7 @@
 #define MCUBOOT_MAX_IMG_SECTORS       128
 #endif
 
-/* Support 32-byte aligned flash sizes */
-#if DT_HAS_CHOSEN(zephyr_flash)
-    #if DT_PROP_OR(DT_CHOSEN(zephyr_flash), write_block_size, 0) > 8
-        #define MCUBOOT_BOOT_MAX_ALIGN \
-            DT_PROP(DT_CHOSEN(zephyr_flash), write_block_size)
-    #endif
-#endif
+#endif /* !__BOOTSIM__ */
 
 #if CONFIG_BOOT_WATCHDOG_FEED
 #if CONFIG_NRFX_WDT
@@ -276,31 +244,18 @@
 #endif /* defined(CONFIG_NRFX_WDT0) && defined(CONFIG_NRFX_WDT1) */
 
 #elif CONFIG_IWDG_STM32 /* CONFIG_NRFX_WDT */
-#include <zephyr/device.h>
-#include <zephyr/drivers/watchdog.h>
+#include <drivers/watchdog.h>
 
 #define MCUBOOT_WATCHDOG_FEED() \
     do {                        \
-        const struct device* wdt =                                  \
-            DEVICE_DT_GET_OR_NULL(DT_INST(0, st_stm32_watchdog));   \
-        if (device_is_ready(wdt)) {                                 \
-            wdt_feed(wdt, 0);                                       \
-        }                                                           \
+        const struct device* wdt =                          \
+            device_get_binding(                             \
+                DT_LABEL(DT_INST(0, st_stm32_watchdog)));   \
+        wdt_feed(wdt, 0);                                   \
     } while (0)
 
-#elif DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay) /* CONFIG_IWDG_STM32 */
-#include <zephyr/device.h>
-#include <zephyr/drivers/watchdog.h>
-
-#define MCUBOOT_WATCHDOG_FEED()                               \
-    do {                                                      \
-        const struct device* wdt =                            \
-            DEVICE_DT_GET(DT_ALIAS(watchdog0));               \
-        if (device_is_ready(wdt)) {                           \
-            wdt_feed(wdt, 0);                                 \
-        }                                                     \
-    } while (0)
-#else /* DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay) */
+#else /* CONFIG_IWDG_STM32 */
+#warning "MCUBOOT_WATCHDOG_FEED() is no-op"
 /* No vendor implementation, no-op for historical reasons */
 #define MCUBOOT_WATCHDOG_FEED()         \
     do {                                \
