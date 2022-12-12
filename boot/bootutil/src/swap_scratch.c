@@ -463,6 +463,11 @@ boot_copy_sz(const struct boot_loader_state *state, int last_sector_idx,
     sz = 0;
 
     scratch_sz = boot_scratch_area_size(state);
+    //TODO: handle without hack
+    if(last_sector_idx == boot_img_num_sectors(state, BOOT_PRIMARY_SLOT)-1)
+    {
+        scratch_sz = 0x14000;
+    }
     for (i = last_sector_idx; i >= 0; i--) {
         new_sz = sz + boot_img_sector_size(state, BOOT_PRIMARY_SLOT, i);
         /*
@@ -527,8 +532,8 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
      * controls if special handling is needed (swapping last sector).
      */
     last_sector = boot_img_num_sectors(state, BOOT_PRIMARY_SLOT) - 1;
-    if ((img_off + sz) >
-        boot_img_sector_off(state, BOOT_PRIMARY_SLOT, last_sector)) {
+    if ((img_off + sz) > boot_img_sector_off(state, BOOT_PRIMARY_SLOT, last_sector))
+    {
         copy_sz -= trailer_sz;
     }
 
@@ -588,6 +593,14 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
     }
 
     if (bs->state == BOOT_STATUS_STATE_1) {
+        // if(sz < 0x20000)
+        // {
+        //     rc = boot_erase_region(fap_secondary_slot, img_off, 0x20000);
+        // }
+        // else
+        // {
+        //     rc = boot_erase_region(fap_secondary_slot, img_off, sz);
+        // }
         rc = boot_erase_region(fap_secondary_slot, img_off, sz);
         assert(rc == 0);
 
@@ -695,7 +708,9 @@ swap_run(struct boot_loader_state *state, struct boot_status *bs,
     secondary_slot_size = 0;
     last_sector_idx = 0;
     last_idx_secondary_slot = 0;
-
+    uint32_t primary_slot_sectors = boot_img_num_sectors(state, BOOT_PRIMARY_SLOT);
+    uint32_t secondary_slot_sectors = boot_img_num_sectors(state, BOOT_SECONDARY_SLOT);
+    
     /*
      * Knowing the size of the largest image between both slots, here we
      * find what is the last sector in the primary slot that needs swapping.
@@ -703,28 +718,38 @@ swap_run(struct boot_loader_state *state, struct boot_status *bs,
      * slot's last sector is not really required after this check is finished.
      */
     while (1) {
-        if ((primary_slot_size < copy_size) ||
-            (primary_slot_size < secondary_slot_size)) {
-           primary_slot_size += boot_img_sector_size(state,
-                                                     BOOT_PRIMARY_SLOT,
-                                                     last_sector_idx);
+        if ((primary_slot_size < copy_size) || (primary_slot_size < secondary_slot_size))
+        {
+           primary_slot_size += boot_img_sector_size(state, BOOT_PRIMARY_SLOT, last_sector_idx);
+           last_sector_idx++;
         }
-        if ((secondary_slot_size < copy_size) ||
-            (secondary_slot_size < primary_slot_size)) {
-           secondary_slot_size += boot_img_sector_size(state,
-                                                       BOOT_SECONDARY_SLOT,
-                                                       last_idx_secondary_slot);
+        if ((secondary_slot_size < copy_size) || (secondary_slot_size < primary_slot_size))
+        {
+           secondary_slot_size += boot_img_sector_size(state, BOOT_SECONDARY_SLOT, last_idx_secondary_slot);
+           last_idx_secondary_slot++;
         }
-        if (primary_slot_size >= copy_size &&
-                secondary_slot_size >= copy_size) {
+        if (primary_slot_size >= copy_size && secondary_slot_size >= copy_size && primary_slot_size == secondary_slot_size)
+        {  
             break;
         }
-        last_sector_idx++;
-        last_idx_secondary_slot++;
+        else if(last_sector_idx >= primary_slot_sectors || last_idx_secondary_slot >= secondary_slot_sectors )
+        {
+            /* if either img accesses its last sector, increase copy size to max so image trailer is delt with correctly */
+            last_sector_idx = boot_img_num_sectors(state, BOOT_PRIMARY_SLOT) -1;
+            last_idx_secondary_slot >= boot_img_num_sectors(state, BOOT_SECONDARY_SLOT) -1;
+            break;
+        }
     }
+    
+    // if(last_sector_idx >= primary_slot_sectors || last_idx_secondary_slot >= secondary_slot_sectors )
+    // {
+    //     last_sector_idx = boot_img_num_sectors(state, BOOT_PRIMARY_SLOT);
+    //     last_idx_secondary_slot >= boot_img_num_sectors(state, BOOT_SECONDARY_SLOT);
+    // }
 
     swap_idx = 0;
-    while (last_sector_idx >= 0) {
+    while (last_sector_idx >= 0)
+    {
         sz = boot_copy_sz(state, last_sector_idx, &first_sector_idx);
         if (swap_idx >= (bs->idx - BOOT_STATUS_IDX_0)) {
             boot_swap_sectors(first_sector_idx, sz, state, bs);
